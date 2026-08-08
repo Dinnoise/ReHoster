@@ -9,17 +9,16 @@
 - **Парсинг `.env` файлов проекта** (поддержка PHP, Laravel, Node.js проектов)
 - **Автоматическое определение зависимостей** (MySQL, PostgreSQL, Redis, MongoDB)
 - **Многораундовый анализ** с разными конфигурациями
-- Построение модели зависимостей/требований к окружению
+- Построение модели зависимостей и требований к окружению
 - Генерация артефактов контейнеризации: `Dockerfile`, `docker-compose.yml` и рекомендации
-- Опциональный **AI-этап refinement** для улучшения baseline `Dockerfile` и `docker-compose.yml` через OpenRouter API
-- Генерация `docker-compose.yml` с **явными значениями по умолчанию** для популярных переменных (без `${VAR:-...}`); по умолчанию `DB_HOST` выставляется в `host.docker.internal` для подключения к локальной БД
+- Опциональный **AI-режим** — интерактивное уточнение артефактов через локальную нейросеть (LM Studio)
 
 ## Требования
 
 - **Java 8**
 - **Maven 3.6**
-- **Docker** 
-- **OpenRouter API key** в переменной окружения `OPENROUTER_API_KEY` для проверки AI-режима
+- **Docker**
+- **LM Studio** с запущенным локальным сервером на `localhost:1234` — только для AI-режима
 
 ## Структура проекта
 
@@ -41,16 +40,18 @@ src/main/java/com/rehoster/
 │   ├── snapshot/                # RuntimeSnapshot, ProcessInfo, EnvVar
 │   ├── analysis/                # AppDependencyModel, EnvVarSpec
 │   └── generation/              # DockerfileSpec, ComposeSpec, RunReport
-└── util/                        # Утилиты
+└── ai/                          # AI-подсистема
+    ├── client/                  # LmStudioAiClient, AiClient interface
+    ├── interactive/             # UserRequirementCollector
+    ├── config/                  # AiConfig, AiMode, AiProvider
+    ├── prompt/                  # AiPromptBuilder
+    ├── service/                 # AiArtifactRefiner, парсер, валидатор
+    └── model/                   # AiRefinementRequest/Result/Outcome
 ```
 
 ## Сборка проекта
 
 ```bash
-# Перейти в директорию проекта
-cd ReHoster
-
-# Собрать проект с зависимостями
 mvn clean package
 ```
 
@@ -62,16 +63,13 @@ mvn clean package
 
 - **CI** — workflow `.github/workflows/ci.yml` запускается при каждом `push` в `main`/`master` и при каждом `pull_request`, собирает проект через Maven и сохраняет JAR как build artifact.
 - **Release** — workflow `.github/workflows/release.yml` запускается при публикации Git-тега вида `v*`, собирает актуальный JAR, создаёт GitHub Release и прикрепляет файл `target/rehoster-<version>.jar`.
-- **Автообновление ссылки скачивания** — при каждом релизе workflow обновляет файл `DOWNLOAD.md`, записывая актуальную версию и ссылку на скачивание JAR из GitHub Releases.
 
-Чтобы выпустить новую версию фреймворка:
+Чтобы выпустить новую версию:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
-
-После выполнения release workflow актуальная ссылка будет доступна в `DOWNLOAD.md` и на странице GitHub Releases.
 
 ## Запуск
 
@@ -88,13 +86,12 @@ java -jar target/rehoster-1.0.0.jar run [опции] -- <команда legacy-�
 | `-t, --timeout <секунды>` | Таймаут выполнения процесса | 60 |
 | `-d, --dir <путь>` | Рабочая директория | текущая |
 | `-o, --output <путь>` | Директория для результатов | `rehoster-output` |
-| `-e, --env <KEY=VALUE>` | Переопределение переменной окружения | - |
-| `--ai` | Включить AI refinement артефактов | выключено |
-| `--ai-mode <off\|advisory\|auto>` | Режим работы AI (`advisory` не применяет изменения автоматически) | `off` |
-| `--ai-model <model>` | Переопределить primary AI model | `qwen/qwen3-coder:free` |
-| `--ai-timeout <секунды>` | Таймаут AI-запроса | 30 |
-| `--no-ai-fallback` | Отключить fallback model | fallback включён |
-| `-h, --help` | Показать справку | - |
+| `-e, --env <KEY=VALUE>` | Переопределение переменной окружения | — |
+| `--ai` | Включить AI-режим (требует LM Studio) | выключено |
+| `--ai-mode <off\|advisory\|auto>` | Режим AI (`advisory` — не применяет изменения автоматически) | `off` |
+| `--ai-model <model>` | Переопределить имя модели в LM Studio | `qwen/qwen3.5-9b` |
+| `--ai-timeout <секунды>` | Таймаут AI-запроса | 120 |
+| `-h, --help` | Показать справку | — |
 
 ### Примеры использования
 
@@ -107,7 +104,7 @@ java -jar target/rehoster-1.0.0.jar run -- java -jar myapp.jar
 #### 2. Анализ с таймаутом и переменными окружения
 
 ```bash
-java -jar target/rehoster-1.0.0.jar run -t 120 -e DB_HOST=localhost -e DB_PORT=5432 -- java -jar myapp.jar
+java -jar target/rehoster-1.0.0.jar run -t 120 -e DB_HOST=localhost -- java -jar myapp.jar
 ```
 
 #### 3. Анализ Python-скрипта
@@ -116,64 +113,40 @@ java -jar target/rehoster-1.0.0.jar run -t 120 -e DB_HOST=localhost -e DB_PORT=5
 java -jar target/rehoster-1.0.0.jar run -- python app.py --port 8080
 ```
 
-#### 4. Анализ нативного бинарника
+#### 4. Запуск с AI-режимом
 
 ```bash
-java -jar target/rehoster-1.0.0.jar run -o ./output -- ./myapp --config config.yaml
+java -jar target/rehoster-1.0.0.jar run --ai -- java -jar myapp.jar
 ```
 
-#### 5. Указание рабочей директории
-
-```bash
-java -jar target/rehoster-1.0.0.jar run -d /path/to/app -- ./start.sh
-```
-
-#### 6. Запуск с AI refinement
-
-```bash
-java -jar target/rehoster-1.0.0.jar run --ai --ai-mode auto -- java -jar myapp.jar
-```
-
-#### 7. Запуск с AI в advisory-режиме
+#### 5. AI в advisory-режиме (артефакты не применяются автоматически)
 
 ```bash
 java -jar target/rehoster-1.0.0.jar run --ai --ai-mode advisory -- java -jar myapp.jar
 ```
 
-## AI refinement
+## AI-режим
 
-Если включён `--ai`, ReHoster:
+Для работы AI-режима необходимо:
 
-- генерирует baseline `Dockerfile` и `docker-compose.yml`
-- собирает безопасный контекст выполнения и проекта
-- маскирует секреты перед отправкой во внешний API
-- отправляет refinement-запрос в OpenRouter
-- валидирует ответ модели
-- применяет результат только если он прошёл policy/validation
+1. Установить и запустить **LM Studio**
+2. Загрузить модель (рекомендуется **Qwen3-9B Q4_K_M**)
+3. Запустить локальный сервер в LM Studio (порт `1234`)
+4. Передать флаг `--ai` при запуске ReHoster
 
-Если AI недоступен, вернул невалидный JSON или предложил рискованные изменения, ReHoster **автоматически откатывается к baseline-артефактам**.
+Если `--ai` указан, ReHoster:
 
-### Где указать API ключ
+1. Проверяет доступность LM Studio (`GET localhost:1234/v1/models`)
+2. Если сервер недоступен — **возвращает baseline без ошибки**
+3. Если доступен — предлагает пользователю ввести требования в консоли
+4. Собирает контекст проекта и маскирует секреты
+5. Отправляет промпт с требованием в LM Studio (`POST /v1/chat/completions`)
+6. Валидирует ответ модели
+7. Применяет изменения если ответ прошёл валидацию и `confidence >= 0.65`
 
-ReHoster читает ключ из переменной окружения:
+Если AI вернул невалидный ответ или недоступен — ReHoster **автоматически откатывается к baseline**.
 
-```bash
-OPENROUTER_API_KEY
-```
-
-Для **Windows PowerShell** перед запуском установите ключ в текущую сессию:
-
-```powershell
-$env:OPENROUTER_API_KEY="ваш_ключ_openrouter"
-```
-
-Для постоянного значения в Windows:
-
-```powershell
-setx OPENROUTER_API_KEY "ваш_ключ_openrouter"
-```
-
-После `setx` откройте **новый** терминал/IDE session.
+Все данные обрабатываются **локально**, ничего не покидает машину.
 
 ## Выходные файлы
 
@@ -183,20 +156,21 @@ setx OPENROUTER_API_KEY "ваш_ключ_openrouter"
 |------|----------|
 | `runtime-snapshot.json` | Сырые данные о запуске приложения |
 | `analysis-result.json` | Результаты анализа зависимостей |
-| `Dockerfile` | Сгенерированный Dockerfile |
-| `docker-compose.yml` | Сгенерированный docker-compose |
-| `Dockerfile.ai` | Dockerfile, предложенный AI (если AI вернул результат) |
-| `docker-compose.ai.yml` | Compose, предложенный AI (если AI вернул результат) |
-| `ai-refinement.json` | Подробный отчёт о работе AI-этапа |
+| `Dockerfile` | Итоговый Dockerfile |
+| `docker-compose.yml` | Итоговый docker-compose |
+| `.dockerignore` | Исключения для Docker build |
+| `Dockerfile.ai` | Dockerfile от AI (если AI применился) |
+| `docker-compose.ai.yml` | Compose от AI (если AI применился) |
+| `ai-refinement.json` | Отчёт о работе AI-этапа |
 | `recommendations.md` | Рекомендации по контейнеризации |
-| `report.json` | Отчёт о выполнении |
+| `report.json` | Общий отчёт о выполнении |
 
 ## Пример вывода
 
 ```
- === ReHoster ===
- Run ID: run-20240215-143025-a1b2c3d4
- Command: php artisan serve
+=== ReHoster ===
+Run ID: run-20240215-143025-a1b2c3d4
+Command: php artisan serve
 
 [1/9] Launching legacy process...
       PID: 12345
@@ -216,77 +190,71 @@ setx OPENROUTER_API_KEY "ваш_ключ_openrouter"
         - mysql (mysql:8.0)
         - redis (redis:7-alpine)
 [6/9] Running multi-round analysis...
-[7/9] Generating baseline container artifacts...
-      Dockerfile.baseline - done
-      docker-compose.baseline.yml - done
-[8/9] Running AI refinement...
+[7/9] Generating container artifacts...
+      .dockerignore - done
+[8/9] Running AI refinement (LM Studio)...
+      Connecting to LM Studio at http://localhost:1234...
+      Connected. Model: qwen/qwen3.5-9b
+
+      Enter your requirements for Dockerfile/docker-compose refinement.
+      Examples: "use alpine image", "remove database services"
+      > убери сервисы MySQL и Redis
+
+      Sending to AI...
+      AI refinement applied (confidence: 0.88)
+      Dockerfile.ai - done
+      docker-compose.ai.yml - done
       Dockerfile - done
       docker-compose.yml - done
       recommendations.md - done
 [9/9] Saving report...
 
 === Complete ===
-Output directory: D:\project\rehoster-output\run-20240215-143025-a1b2c3d4
-
-Generated files:
-  - .dockerignore
-  - runtime-snapshot.json
-  - analysis-result.json
-  - ai-refinement.json
-  - Dockerfile
-  - docker-compose.yml
-  - recommendations.md
-  - report.json
+Output directory: rehoster-output\run-20240215-143025-a1b2c3d4
 ```
 
 ## Архитектура
 
 ```
-CLI → Orchestrator → Launcher → Collectors → Storage → Analyzers → Generators → AI Refiner → Output
-                                    ↓
-                         [ProcessCollector]
-                         [EnvironmentCollector]
-                         [EnvFileCollector]
-                         [ArgsCollector]
-                                    ↓
-                     [DependencyAnalyzer]
-                     [ServiceDependencyDetector]
-                     [MultiRoundAnalyzer]
-                                    ↓
-                          [AiArtifactRefiner]
+CLI → Orchestrator → Launcher → Collectors → Analyzers → Generators → AI Refiner → Output
+                                                               ↓
+                                                   [DependencyAnalyzer]
+                                                   [ServiceDependencyDetector]
+                                                   [MultiRoundAnalyzer]
+                                                               ↓
+                                                   baseline Dockerfile + Compose
+                                                               ↓
+                                                   [LmStudioAiClient] ping
+                                                   [UserRequirementCollector]
+                                                   [AiArtifactRefiner]
+                                                   POST localhost:1234
+                                                               ↓
+                                                   final Dockerfile + Compose
 ```
 
 1. **CLI** — парсит аргументы, формирует `RunConfig`
-2. **Orchestrator** — управляет сценарием выполнения (9 этапов при включённом AI)
+2. **Orchestrator** — управляет 9 этапами выполнения
 3. **Launcher** — запускает legacy-процесс через `ProcessBuilder`
 4. **Collectors** — собирают данные (процессы, env, args, .env файлы)
-5. **Storage** — сохраняет снимки и результаты в JSON
-6. **Analyzers**:
-   - `DependencyAnalyzer` — строит модель зависимостей приложения
-   - `ServiceDependencyDetector` — определяет внешние сервисы (БД, кеш)
-   - `MultiRoundAnalyzer` — запускает приложение с разными конфигурациями
-7. **Generators** — генерируют baseline Dockerfile/Compose/рекомендации
-8. **AI Refiner** — безопасно дорабатывает baseline-артефакты и при ошибках откатывается к baseline
+5. **Analyzers** — строят модель зависимостей, определяют сервисы, многораундовый анализ
+6. **Generators** — генерируют baseline Dockerfile, Compose, рекомендации
+7. **AI Refiner** — при включённом `--ai` подключается к LM Studio, принимает требование пользователя, дорабатывает baseline и при ошибках автоматически откатывается
 
-## Ограничения и troubleshooting
+## Troubleshooting
 
-### Почему может сгенерироваться Dockerfile с `FROM ubuntu:22.04`
+### Сгенерирован `FROM ubuntu:22.04` вместо нужного образа
 
-Это означает, что приложение классифицировано как `generic`.
-Частые причины:
+Приложение классифицировано как `generic`. Возможные причины:
 
-- команда запуска обёрнута в оболочку (`cmd.exe /c ...`) и тип приложения не извлечён из команды
-- рабочая директория анализа (`--dir`) указывает не на корень проекта и ReHoster не видит `pom.xml`
+- команда запуска обёрнута в оболочку (`cmd.exe /c ...`)
+- `--dir` указывает не на корень проекта, где лежит `pom.xml` / `package.json`
 
-Решение:
+Решение: передать корень проекта через `-d/--dir`.
 
-- явно передавать корень проекта через `-d/--dir` так, чтобы там лежали `pom.xml` и папка `src/`
-- для Maven/Spring использовать запуск через Maven wrapper (`mvnw.cmd`) или установленный `mvn`
+### LM Studio недоступен
 
-### Docker build падает на `cmd.exe`
+ReHoster возвращает baseline без ошибки. Убедитесь что:
 
-Если в Dockerfile встречается `cmd.exe`, это почти наверняка означает, что Dockerfile был сгенерирован как для Windows-сценария запуска процесса.
-Для Linux-контейнеров это неверно. Правильный путь:
-
-- генерировать multi-stage Dockerfile (Maven build -> JRE runtime)
-- запускать `java -jar ...`, а не `mvn spring-boot:run`
+- LM Studio запущен и модель загружена
+- Локальный сервер включён (кнопка **Start Server** в LM Studio)
+- Порт `1234` не занят другим процессом

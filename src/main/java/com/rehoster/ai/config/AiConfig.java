@@ -3,10 +3,10 @@ package com.rehoster.ai.config;
 import com.rehoster.model.run.RunConfig;
 
 public class AiConfig {
-    public static final String DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/chat/completions";
+    public static final String DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions";
     public static final String DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY";
-    public static final String DEFAULT_PRIMARY_MODEL = "qwen/qwen3-coder:free";
-    public static final String DEFAULT_FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+    public static final String DEFAULT_PRIMARY_MODEL = "qwen/qwen3.5-9b";
+    public static final String DEFAULT_FALLBACK_MODEL = "qwen/qwen3.5-9b";
 
     private boolean enabled;
     private AiMode mode;
@@ -24,14 +24,14 @@ public class AiConfig {
     public AiConfig() {
         this.enabled = false;
         this.mode = AiMode.OFF;
-        this.provider = AiProvider.OPENROUTER;
+        this.provider = AiProvider.LM_STUDIO;
         this.baseUrl = DEFAULT_BASE_URL;
         this.apiKeyEnvVar = DEFAULT_API_KEY_ENV;
         this.primaryModel = DEFAULT_PRIMARY_MODEL;
         this.fallbackModel = DEFAULT_FALLBACK_MODEL;
         this.temperature = 0.1d;
-        this.timeoutSeconds = 30;
-        this.maxInputSize = 24000;
+        this.timeoutSeconds = 120;
+        this.maxInputSize = 8000; // keep prompt small to leave room for response tokens
         this.minConfidence = 0.65d;
         this.fallbackEnabled = true;
     }
@@ -44,9 +44,11 @@ public class AiConfig {
 
         config.setEnabled(runConfig.isAiEnabled());
         config.setMode(runConfig.getAiMode() != null ? runConfig.getAiMode() : (runConfig.isAiEnabled() ? AiMode.AUTO_APPLY : AiMode.OFF));
-        config.setProvider(AiProvider.OPENROUTER);
+        config.setProvider(AiProvider.LM_STUDIO);
 
-        String baseUrl = System.getenv("REHOSTER_AI_BASE_URL");
+        String baseUrl = System.getenv("REHOSTER_LM_STUDIO_URL") != null
+            ? System.getenv("REHOSTER_LM_STUDIO_URL")
+            : System.getenv("REHOSTER_AI_BASE_URL");
         if (baseUrl != null && !baseUrl.trim().isEmpty()) {
             config.setBaseUrl(baseUrl.trim());
         }
@@ -107,8 +109,8 @@ public class AiConfig {
     }
 
     public boolean isConfigured() {
-        String apiKey = System.getenv(apiKeyEnvVar);
-        return apiKey != null && !apiKey.trim().isEmpty();
+        // LM Studio requires no API key — availability is checked via HTTP ping in Orchestrator
+        return true;
     }
 
     public boolean isEnabledFlag() {

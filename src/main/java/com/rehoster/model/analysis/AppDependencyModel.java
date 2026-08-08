@@ -1,9 +1,9 @@
 package com.rehoster.model.analysis;
 
-import com.rehoster.model.snapshot.Observation;
-
 import java.util.ArrayList;
 import java.util.List;
+
+import com.rehoster.model.snapshot.Observation;
 
 public class AppDependencyModel {
     private List<String> entrypoint;

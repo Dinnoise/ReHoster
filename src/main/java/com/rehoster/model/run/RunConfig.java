@@ -25,7 +25,7 @@ public class RunConfig {
         this.envOverrides = new HashMap<>();
         this.timeoutSeconds = 60;
         this.aiMode = AiMode.OFF;
-        this.aiTimeoutSeconds = 30;
+        this.aiTimeoutSeconds = 0; // 0 means use AiConfig default (120s)
         this.aiFallbackEnabled = true;
     }
 

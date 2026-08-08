@@ -47,7 +47,8 @@ public class AiArtifactRefiner {
                                       List<ServiceDependency> serviceDependencies,
                                       String baselineDockerfile,
                                       String baselineCompose,
-                                      AiConfig config) {
+                                      AiConfig config,
+                                      String userRequirement) {
         AiRefinementOutcome outcome = new AiRefinementOutcome();
         AiExecutionReport report = createInitialReport(config);
         outcome.setExecutionReport(report);
@@ -57,12 +58,6 @@ public class AiArtifactRefiner {
         if (config == null || !config.isEnabled()) {
             report.setSkipped(true);
             report.setFailureReason("AI refinement is disabled");
-            return outcome;
-        }
-        if (!config.isConfigured()) {
-            report.setSkipped(true);
-            report.setFailureReason("AI API key is not configured");
-            report.getWarnings().add("Missing AI API key, baseline artifacts kept");
             return outcome;
         }
 
@@ -79,7 +74,7 @@ public class AiArtifactRefiner {
             request = secretSanitizer.sanitize(request);
 
             String systemPrompt = promptBuilder.buildSystemPrompt();
-            String userPrompt = promptBuilder.buildUserPrompt(request, config);
+            String userPrompt = promptBuilder.buildUserPrompt(request, config, userRequirement);
             AiClientResponse aiResponse = aiClient.generate(systemPrompt, userPrompt, config);
             report.setUsedModel(aiResponse.getUsedModel());
             report.setFallbackUsed(aiResponse.isFallbackUsed());

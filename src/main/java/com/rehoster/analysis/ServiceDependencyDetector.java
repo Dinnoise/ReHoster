@@ -476,10 +476,8 @@ public class ServiceDependencyDetector {
 
     private ServiceDependency createMySQLDependency(Map<String, String> config) {
         ServiceDependency mysql = new ServiceDependency("mysql", "mysql:8.0", 3306);
-        mysql.getEnvironment().put("MYSQL_ROOT_PASSWORD", config.getOrDefault("password", "root"));
         mysql.getEnvironment().put("MYSQL_DATABASE", config.getOrDefault("database", "app"));
-        mysql.getEnvironment().put("MYSQL_USER", config.getOrDefault("username", "app"));
-        mysql.getEnvironment().put("MYSQL_PASSWORD", config.getOrDefault("password", "secret"));
+        mysql.getEnvironment().put("MYSQL_ALLOW_EMPTY_PASSWORD", "yes");
         mysql.getVolumes().add("mysql_data:/var/lib/mysql");
         mysql.setHealthCheck("mysqladmin ping -h localhost");
         return mysql;

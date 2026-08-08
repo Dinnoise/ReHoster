@@ -9,34 +9,20 @@ import com.rehoster.ai.config.AiConfig;
 import com.rehoster.ai.model.AiRefinementRequest;
 
 public class AiPromptBuilder {
-    private static final String SYSTEM_PROMPT = "You are the AI refinement stage of ReHoster, a Java framework for migrating legacy applications into containers.\n\n"
-        + "Your task is to refine an already generated Dockerfile and docker-compose.yml using structured runtime analysis, dependency analysis, and project manifest files.\n\n"
-        + "You must behave as a strict infrastructure configuration refiner.\n\n"
-        + "Goals:\n"
-        + "1. Improve correctness of Dockerfile and docker-compose.yml.\n"
-        + "2. Preserve the intent of the baseline configuration.\n"
-        + "3. Minimize unnecessary changes and keep the output lean.\n"
-        + "4. Prefer fast builds, small images, and simple configurations over bulky convenience installs.\n"
-        + "5. Return only valid JSON in the exact schema requested.\n\n"
-        + "Hard rules:\n"
-        + "1. Do not return markdown.\n"
-        + "2. Do not wrap JSON in code fences.\n"
-        + "3. Do not explain outside JSON fields.\n"
-        + "4. Do not invent files that are not supported by the provided input.\n"
-        + "5. Do not assume secrets or credentials.\n"
-        + "6. Do not remove required environment variables unless they are clearly invalid duplicates.\n"
-        + "7. Do not replace detected service dependencies with unrelated services.\n"
-        + "8. Do not convert a working baseline into a riskier configuration unless there is strong evidence in the input.\n"
-        + "9. If confidence is low, keep the baseline mostly unchanged and describe the uncertainty.\n"
-        + "10. If build-time behavior is unclear, prefer conservative improvements over large rewrites.\n"
-        + "11. Keep Dockerfile instructions minimal: do not install packages, Node.js, npm, compilers, build tools, or extra OS libraries unless the input provides strong evidence they are required.\n"
-        + "12. Avoid slow and heavy image customizations when a simpler baseline already works.\n"
-        + "13. In docker-compose.yml, do not create containerized database, cache, queue, or search services such as mysql, mariadb, postgres, redis, mongodb, rabbitmq, kafka, elasticsearch, or similar infrastructure components.\n"
-        + "14. Assume such services already exist outside Docker on the local network or host machine; preserve application connectivity by keeping ports and environment variables, but point the application service to external/local service endpoints instead of provisioning new infrastructure containers.\n"
-        + "15. If a baseline compose file includes local infrastructure services, remove them unless the input contains explicit evidence that ReHoster itself must run those services inside Docker.\n"
-        + "16. Use exec-form CMD or ENTRYPOINT for the main container process, not shell-form strings. Run the application as PID 1 directly so it receives SIGTERM/SIGINT correctly and stops cleanly when the container stops.\n"
-        + "17. Avoid shell wrappers such as sh -c, bash -c, tail -f, sleep infinity, or other keep-alive commands unless the input explicitly requires them.\n\n"
-        + "Return JSON with fields: dockerfile, dockerCompose, summary, warnings, appliedChanges, confidence, shouldApply.";
+    private static final String SYSTEM_PROMPT =
+        "You are an AI assistant helping to containerize legacy applications with Docker.\n\n"
+        + "Your task is to refine a baseline Dockerfile and docker-compose.yml based on the provided "
+        + "project analysis and the user's specific requirements.\n\n"
+        + "Return ONLY valid JSON (no markdown, no code fences) with these exact fields:\n"
+        + "{\n"
+        + "  \"dockerfile\": \"<Dockerfile content as string>\",\n"
+        + "  \"dockerCompose\": \"<docker-compose.yml content as string>\",\n"
+        + "  \"summary\": \"<short description of changes made>\",\n"
+        + "  \"appliedChanges\": [\"<change 1>\", \"<change 2>\"],\n"
+        + "  \"warnings\": [\"<warning if any>\"],\n"
+        + "  \"confidence\": <number between 0.0 and 1.0>,\n"
+        + "  \"shouldApply\": <true or false>\n"
+        + "}";
 
     private final Gson compactGson;
 
@@ -48,16 +34,30 @@ public class AiPromptBuilder {
         return SYSTEM_PROMPT;
     }
 
-    public String buildUserPrompt(AiRefinementRequest request, AiConfig config) {
+    public String buildUserPrompt(AiRefinementRequest request, AiConfig config, String userRequirement) {
         String requestJson = compactGson.toJson(limitRequestSize(request, config.getMaxInputSize()));
-        return "Refine the baseline Dockerfile and docker-compose.yml for this ReHoster run.\n\n"
-            + "Input JSON:\n"
-            + requestJson
-            + "\n\nReturn JSON with the exact schema requested below.\n"
-            + "Prioritize minimal Dockerfile changes, fast builds, and compact output.\n"
-            + "Do not add database or cache containers to docker-compose; keep only the application-facing services and connect them to already existing external/local infrastructure using environment variables and hostnames.\n"
-            + "Use exec-form CMD or ENTRYPOINT and start the real application process directly so container stop signals terminate it cleanly without leaving orphan CLI processes.\n"
-            + "If you are uncertain, preserve the baseline and explain the risk in the warnings field.";
+
+        StringBuilder prompt = new StringBuilder();
+
+        if (userRequirement != null && !userRequirement.trim().isEmpty()) {
+            prompt.append("=== MANDATORY USER REQUIREMENT (HIGHEST PRIORITY) ===\n");
+            prompt.append(userRequirement.trim()).append("\n");
+            prompt.append("You MUST follow this requirement exactly. It overrides any other considerations.\n");
+            prompt.append("=====================================================\n\n");
+        }
+
+        prompt.append("Refine the baseline Dockerfile and docker-compose.yml for this project.\n\n");
+        prompt.append("Project analysis (JSON):\n");
+        prompt.append(requestJson);
+
+        if (userRequirement == null || userRequirement.trim().isEmpty()) {
+            prompt.append("\n\nNo specific requirements. Improve the baseline if possible while keeping it minimal and correct.");
+        } else {
+            prompt.append("\n\nRemember: apply the user requirement above first and foremost.");
+        }
+
+        prompt.append("\n\nReturn ONLY the JSON response with the exact schema described in the system prompt.");
+        return prompt.toString();
     }
 
     private AiRefinementRequest limitRequestSize(AiRefinementRequest request, int maxInputSize) {

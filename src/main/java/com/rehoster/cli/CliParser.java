@@ -179,22 +179,25 @@ public class CliParser {
         System.out.println("Usage: rehoster run [options] -- <legacy command>");
         System.out.println();
         System.out.println("Options:");
-        System.out.println("  -t, --timeout <seconds>  Timeout for legacy process (default: 60)");
-        System.out.println("  -d, --dir <path>         Working directory for legacy process");
-        System.out.println("  -o, --output <path>      Output directory (default: rehoster-output)");
-        System.out.println("  -e, --env <KEY=VALUE>    Environment variable override (can be repeated)");
-        System.out.println("  --ai                     Enable AI artifact refinement");
-        System.out.println("  --ai-mode <off|advisory|auto>  AI refinement mode");
-        System.out.println("  --ai-model <model>       Override primary AI model");
-        System.out.println("  --ai-timeout <seconds>   Timeout for AI request (default: 30)");
-        System.out.println("  --no-ai-fallback         Disable fallback AI model");
-        System.out.println("  -h, --help               Show this help message");
+        System.out.println("  -t, --timeout <seconds>        Timeout for legacy process (default: 60)");
+        System.out.println("  -d, --dir <path>               Working directory for legacy process");
+        System.out.println("  -o, --output <path>            Output directory (default: rehoster-output)");
+        System.out.println("  -e, --env <KEY=VALUE>          Environment variable override (can be repeated)");
+        System.out.println("  --ai                           Enable AI artifact refinement via LM Studio");
+        System.out.println("  --ai-mode <off|advisory|auto>  AI refinement mode (default: auto)");
+        System.out.println("  --ai-model <model>             Override AI model name (default: qwen3-9b)");
+        System.out.println("  --ai-timeout <seconds>         Timeout for AI request (default: 120)");
+        System.out.println("  -h, --help                     Show this help message");
+        System.out.println();
+        System.out.println("AI mode requires LM Studio running locally on http://localhost:1234");
+        System.out.println("Recommended model: Qwen3-9B-Q4_K_M (load it in LM Studio before running)");
         System.out.println();
         System.out.println("Examples:");
         System.out.println("  rehoster run -- java -jar myapp.jar");
         System.out.println("  rehoster run -t 120 -e DB_HOST=localhost -- ./myapp");
         System.out.println("  rehoster run --output ./output -- python app.py");
-        System.out.println("  rehoster run --ai --ai-mode advisory -- java -jar myapp.jar");
+        System.out.println("  rehoster run --ai -- java -jar myapp.jar");
+        System.out.println("  rehoster run --ai --ai-model qwen3-9b -- java -jar myapp.jar");
     }
 
     public boolean validate(RunConfig config) {

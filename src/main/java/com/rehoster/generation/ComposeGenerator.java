@@ -1,6 +1,7 @@
 package com.rehoster.generation;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -86,6 +87,10 @@ public class ComposeGenerator {
                 spec.addService(depService);
                 service.getDependsOn().add(dep.getServiceName());
             }
+
+            if (shouldUseLaravelMysqlStartupCommand(model, appliedDeps)) {
+                service.setCommand(Arrays.asList(buildLaravelMysqlStartupCommand(resolveAppPort(model))));
+            }
         }
         
         spec.addService(service);
@@ -142,6 +147,43 @@ public class ComposeGenerator {
 
     private boolean isDatabaseService(String serviceName) {
         return "mysql".equals(serviceName) || "postgres".equals(serviceName);
+    }
+
+    private boolean shouldUseLaravelMysqlStartupCommand(AppDependencyModel model, List<ServiceDependency> appliedDeps) {
+        return model != null
+            && "php".equals(model.getDetectedType())
+            && containsService(appliedDeps, "mysql")
+            && isLaravelArtisanServe(model.getEntrypoint());
+    }
+
+    private boolean isLaravelArtisanServe(List<String> entrypoint) {
+        if (entrypoint == null || entrypoint.isEmpty()) {
+            return false;
+        }
+
+        boolean hasArtisan = false;
+        boolean hasServe = false;
+        for (String arg : entrypoint) {
+            if (arg == null) continue;
+            String a = arg.toLowerCase();
+            if (a.contains("artisan")) hasArtisan = true;
+            if ("serve".equals(a) || a.endsWith(" serve") || a.contains("artisan serve")) hasServe = true;
+        }
+        return hasArtisan && hasServe;
+    }
+
+    private int resolveAppPort(AppDependencyModel model) {
+        if (model != null && model.getExposedPorts() != null && !model.getExposedPorts().isEmpty() && model.getExposedPorts().get(0) != null) {
+            return model.getExposedPorts().get(0);
+        }
+        return 8000;
+    }
+
+    private String buildLaravelMysqlStartupCommand(int port) {
+        return ">\n"
+            + "      sh -c \"until php -r 'exit(@fsockopen(\\\"mysql\\\", 3306) ? 0 : 1);'; do sleep 2; done\n"
+            + "      && php artisan migrate --force\n"
+            + "      && php artisan serve --host=0.0.0.0 --port=" + port + "\"";
     }
 
     private String resolvePreferredDbService(String dbConnectionValue) {

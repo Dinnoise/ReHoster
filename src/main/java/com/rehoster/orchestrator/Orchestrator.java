@@ -7,8 +7,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import com.rehoster.ai.client.OpenRouterAiClient;
+import com.rehoster.ai.client.LmStudioAiClient;
 import com.rehoster.ai.config.AiConfig;
+import com.rehoster.ai.interactive.UserRequirementCollector;
 import com.rehoster.ai.model.AiExecutionReport;
 import com.rehoster.ai.model.AiRefinementOutcome;
 import com.rehoster.ai.service.AiArtifactRefiner;
@@ -52,6 +53,7 @@ public class Orchestrator {
     private final DockerignoreGenerator dockerignoreGenerator;
     private final ComposeGenerator composeGenerator;
     private final RecommendationGenerator recommendationGenerator;
+    private final LmStudioAiClient lmStudioAiClient;
     private final AiArtifactRefiner aiArtifactRefiner;
     private boolean deepAnalysisEnabled = true;
 
@@ -62,7 +64,7 @@ public class Orchestrator {
         this.collectors.add(new EnvironmentCollector());
         this.collectors.add(new EnvFileCollector());
         this.collectors.add(new ArgsCollector());
-        
+
         this.storage = new JsonStorage();
         this.analyzer = new DependencyAnalyzer();
         this.serviceDependencyDetector = new ServiceDependencyDetector();
@@ -71,11 +73,12 @@ public class Orchestrator {
         this.dockerignoreGenerator = new DockerignoreGenerator();
         this.composeGenerator = new ComposeGenerator();
         this.recommendationGenerator = new RecommendationGenerator();
+        this.lmStudioAiClient = new LmStudioAiClient();
         this.aiArtifactRefiner = new AiArtifactRefiner(
             new AiContextCollector(),
             new AiSecretSanitizer(),
             new com.rehoster.ai.prompt.AiPromptBuilder(),
-            new OpenRouterAiClient(),
+            lmStudioAiClient,
             new AiResponseParser(),
             new AiResponseValidator(),
             new ArtifactMergePolicy()
@@ -174,21 +177,67 @@ public class Orchestrator {
             storage.saveDockerignore(dockerignore, outputDir);
             report.addGeneratedArtifact(".dockerignore");
             System.out.println("      .dockerignore - done");
-            
+
             String serviceName = extractServiceName(config.getLegacyCommand(), config.getWorkingDirectory());
             composeGenerator.setServiceDependencies(serviceDeps);
             String baselineCompose = composeGenerator.generate(model, serviceName);
 
             System.out.println("[8/9] Running AI refinement...");
-            AiRefinementOutcome aiOutcome = aiArtifactRefiner.refine(
-                config.getWorkingDirectory(),
-                serviceName,
-                model,
-                serviceDeps,
-                baselineDockerfile,
-                baselineCompose,
-                aiConfig
-            );
+
+            AiRefinementOutcome aiOutcome;
+
+            if (!aiConfig.isEnabled()) {
+                System.out.println("      AI mode is off, using baseline artifacts.");
+                AiExecutionReport skippedReport = new AiExecutionReport();
+                skippedReport.setSkipped(true);
+                skippedReport.setFailureReason("AI refinement is disabled");
+                skippedReport.setSuccess(false);
+                skippedReport.setApplied(false);
+                skippedReport.setValidationErrors(new ArrayList<String>());
+                skippedReport.setWarnings(new ArrayList<String>());
+                aiOutcome = new AiRefinementOutcome();
+                aiOutcome.setExecutionReport(skippedReport);
+                aiOutcome.setFinalDockerfile(baselineDockerfile);
+                aiOutcome.setFinalDockerCompose(baselineCompose);
+            } else {
+                System.out.println("      Connecting to LM Studio at " + aiConfig.getBaseUrl() + "...");
+                boolean lmAvailable = lmStudioAiClient.isAvailable(aiConfig.getBaseUrl());
+
+                if (!lmAvailable) {
+                    System.out.println("      LM Studio is not available. Using baseline artifacts.");
+                    AiExecutionReport unavailableReport = new AiExecutionReport();
+                    unavailableReport.setSkipped(true);
+                    unavailableReport.setFailureReason("LM Studio is not running at " + aiConfig.getBaseUrl());
+                    unavailableReport.setSuccess(false);
+                    unavailableReport.setApplied(false);
+                    unavailableReport.setValidationErrors(new ArrayList<String>());
+                    List<String> warnings = new ArrayList<String>();
+                    warnings.add("LM Studio not available, baseline artifacts kept");
+                    unavailableReport.setWarnings(warnings);
+                    aiOutcome = new AiRefinementOutcome();
+                    aiOutcome.setExecutionReport(unavailableReport);
+                    aiOutcome.setFinalDockerfile(baselineDockerfile);
+                    aiOutcome.setFinalDockerCompose(baselineCompose);
+                } else {
+                    System.out.println("      Connected. Model: " + aiConfig.getPrimaryModel());
+
+                    String userRequirement = new UserRequirementCollector().collect();
+
+                    System.out.println();
+                    System.out.println("      Sending to AI...");
+
+                    aiOutcome = aiArtifactRefiner.refine(
+                        config.getWorkingDirectory(),
+                        serviceName,
+                        model,
+                        serviceDeps,
+                        baselineDockerfile,
+                        baselineCompose,
+                        aiConfig,
+                        userRequirement
+                    );
+                }
+            }
 
             AiExecutionReport aiExecutionReport = aiOutcome.getExecutionReport();
             storage.saveAiRefinementReport(aiExecutionReport, outputDir);
@@ -212,6 +261,11 @@ public class Orchestrator {
             storage.saveDockerCompose(aiOutcome.getFinalDockerCompose(), outputDir);
             report.addGeneratedArtifact("docker-compose.yml");
             System.out.println("      docker-compose.yml - done");
+
+            if (aiSucceeded && aiExecutionReport.isApplied()) {
+                System.out.println("      AI refinement applied (confidence: "
+                    + String.format("%.2f", aiExecutionReport.getConfidence()) + ")");
+            }
 
             report.setAiFallbackUsed(aiExecutionReport != null && aiExecutionReport.isFallbackUsed());
             report.setAiApplied(aiExecutionReport != null && aiExecutionReport.isApplied());
@@ -267,7 +321,7 @@ public class Orchestrator {
         if (command == null || command.isEmpty()) {
             return "app";
         }
-        
+
         String firstArg = command.get(0);
 
         if (firstArg != null) {
@@ -278,7 +332,7 @@ public class Orchestrator {
                 }
             }
         }
-        
+
         for (String arg : command) {
             if (arg.endsWith(".jar")) {
                 String name = arg.substring(arg.lastIndexOf('/') + 1);
@@ -293,7 +347,7 @@ public class Orchestrator {
                 return sanitizeServiceName(name);
             }
         }
-        
+
         String name = firstArg.substring(firstArg.lastIndexOf('/') + 1);
         name = name.substring(name.lastIndexOf('\\') + 1);
         return sanitizeServiceName(name);
